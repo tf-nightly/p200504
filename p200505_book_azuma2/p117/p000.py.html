@@ -1,0 +1,241 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <style>
+      body {
+        font-family: monospace;
+        font-size: larger;
+        line-height: 180%;
+      }
+      .larger {
+        font-family: serif;
+        font-size: larger;
+      }
+      .latex {
+        font-family: serif;
+        font-size: smaller;
+        line-height: 100%;
+      }
+    </style>
+<script>
+MathJax = {
+  tex: {
+    displayMath: [['$' + '$' + '$', '$' + '$' + '$']],
+    inlineMath: [['$' + '$', '$' + '$']]
+  }
+};
+</script>
+<script id="MathJax-script" async
+  src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js">
+</script>
+  </head>
+  <body>
+import numpy as np<br>
+import matplotlib.pyplot as plt<br>
+<br>
+n_time = 10<br>
+n_in = 1<br>
+n_mid = 20<br>
+n_out = 1<br>
+<br>
+eta = 0.001<br>
+epochs = 51<br>
+# epochs = 510<br>
+batch_size = 8<br>
+interval = 5<br>
+interval = 50<br>
+<br>
+# <span class="latex">$$[-2\pi, 2\pi]$$</span> つまり2周期。<br>
+sin_x = np.linspace(-2*np.pi, 2*np.pi)<br>
+assert sin_x.shape == (50,)<br>
+# ノイズを加える。ノイズは標準偏差0.1の正規分布とする。<br>
+sin_y = np.sin(sin_x) + 0.1*np.random.randn(len(sin_x))<br>
+assert sin_y.shape == (50,)<br>
+<br>
+n_sample = len(sin_x)-n_time<br>
+assert n_sample == 40<br>
+input_data = np.zeros((n_sample, n_time, n_in))<br>
+assert input_data.shape == (40, 10, 1)<br>
+correct_data = np.zeros((n_sample, n_out))<br>
+assert correct_data.shape == (40, 1)<br>
+for i in range(0, n_sample):&nbsp; # 各標本を作成する。<br>
+&nbsp; a = sin_y[i:i + n_time]<br>
+&nbsp; assert a.shape == (10,)<br>
+&nbsp; input_data[i] = a.reshape(-1, 1)<br>
+&nbsp; assert input_data[i].shape == (10, 1)<br>
+&nbsp; correct_data[i] = sin_y[i + n_time:i + n_time + 1]<br>
+&nbsp; assert correct_data[i].shape == (1,)<br>
+<br>
+class SimpleRNNLayer:<br>
+&nbsp; """RNN (recurrent neural network) 層。"""<br>
+&nbsp; def __init__(self, n_upper, n):<br>
+&nbsp; &nbsp; # Xavierの初期値。<span class="latex">$$\sim N(0, \frac{1}{n}).$$</span><br>
+&nbsp; &nbsp; self.w = np.random.randn(n_upper, n) / np.sqrt(n_upper)<br>
+&nbsp; &nbsp; # Xavierの初期値。<span class="latex">$$\sim N(0, \frac{1}{n}).$$</span><br>
+&nbsp; &nbsp; self.v = np.random.randn(n, n) / np.sqrt(n)<br>
+&nbsp; &nbsp; self.b = np.zeros(n)<br>
+&nbsp; def forward(self, x, y_prev):<br>
+&nbsp; &nbsp; # <span class="latex">$$$ U^{(t)} = X^{(t)}W + Y^{(t-1)}V + B. $$$</span>&nbsp; &nbsp; u = np.dot(x, self.w) + np.dot(y_prev, self.v) + self.b<br>
+&nbsp; &nbsp; # <span class="latex">$$$ Y^{(t)} = \phi(U^{(t)}) $$$</span>&nbsp; &nbsp; # tanh:<br>
+&nbsp; &nbsp; # <span class="latex">$$$\phi(x) = \frac{e^{x} - e^{-x}}{e^{x} + e^{-x}}.$$$</span>&nbsp; &nbsp; self.y = np.tanh(u)<br>
+&nbsp; def backward(self, x, y, y_prev, grad_y):<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \delta^{(t)} = \frac{\partial E}{\partial u^{(t)}} = \frac{\partial E}{\partial y^{(t)}} \frac{\partial y^{(t)}}{\partial u^{(t)}}. $$$</span>&nbsp; &nbsp; # Where<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial y^{(t)}}{\partial u^{(t)}} = \phi' = (1 - y^2). $$$</span>&nbsp; &nbsp; delta = grad_y * (1 - y**2)<br>
+<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial W} = \sum_{t=1}^{\tau} X^{(t)\rm{T}} \Delta^{(t)}. $$$</span>&nbsp; &nbsp; self.grad_w += np.dot(x.T, delta)<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial V} = \sum_{t=1}^{\tau} Y^{(t-1)\rm{T}} \Delta^{(t)}. $$$</span>&nbsp; &nbsp; self.grad_v += np.dot(y_prev.T, delta)<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial B} = \left( \sum_{t=1}^{\tau} \sum_{k=1}^{h} \delta_{ki} \ ... \right). $$$</span>&nbsp; &nbsp; self.grad_b += np.sum(delta, axis=0)<br>
+<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial X^{(t)}} = \Delta^{(t)} W^{\rm{T}}. $$$</span>&nbsp; &nbsp; self.grad_x = np.dot(delta, self.w.T)<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial Y^{(t-1)}} = \Delta^{(t)} V^{\rm{T}}. $$$</span>&nbsp; &nbsp; self.grad_y_prev = np.dot(delta, self.v.T)<br>
+&nbsp; def reset_sum_grad(self):<br>
+&nbsp; &nbsp; self.grad_w = np.zeros_like(self.w)<br>
+&nbsp; &nbsp; self.grad_v = np.zeros_like(self.v)<br>
+&nbsp; &nbsp; self.grad_b = np.zeros_like(self.b)<br>
+&nbsp; def update(self, eta):<br>
+&nbsp; &nbsp; self.w -= eta * self.grad_w<br>
+&nbsp; &nbsp; self.v -= eta * self.grad_v<br>
+&nbsp; &nbsp; self.b -= eta * self.grad_b<br>
+<br>
+class OutputLayer:<br>
+&nbsp; """全結合層。"""<br>
+&nbsp; def __init__(self, n_upper, n):<br>
+&nbsp; &nbsp; # Xavierの初期値。<span class="latex">$$\sim N(0, \frac{1}{n}).$$</span><br>
+&nbsp; &nbsp; self.w = np.random.randn(n_upper, n)<br>
+&nbsp; &nbsp; self.b = np.zeros(n)<br>
+&nbsp; def forward(self, x):<br>
+&nbsp; &nbsp; self.x = x<br>
+&nbsp; &nbsp; # <span class="latex">$$ U = XW + B. $$</span><br>
+&nbsp; &nbsp; u = np.dot(x, self.w) + self.b<br>
+&nbsp; &nbsp; # 恒等関数。<span class="latex">$$ \phi(x) = x. $$</span><br>
+&nbsp; &nbsp; self.y = u<br>
+&nbsp; def backward(self, t):<br>
+&nbsp; &nbsp; delta = self.y - t<br>
+<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial W} = X^{\rm{T}} \Delta. $$$</span>&nbsp; &nbsp; self.grad_w = np.dot(self.x.T, delta)<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial B} = \left( \sum_{k=1}^{h} \delta_{ki} \ ... \right). $$$</span>&nbsp; &nbsp; self.grad_b = np.sum(delta, axis=0)<br>
+&nbsp; &nbsp; # <span class="latex">$$$ \frac{\partial E}{\partial X} = \Delta W^{\rm{T}}. $$$</span>&nbsp; &nbsp; self.grad_x = np.dot(delta, self.w.T)<br>
+&nbsp; def update(self, eta):<br>
+&nbsp; &nbsp; self.w -= eta * self.grad_w<br>
+&nbsp; &nbsp; self.b -= eta * self.grad_b<br>
+<br>
+rnn_layer = SimpleRNNLayer(n_in, n_mid)<br>
+output_layer = OutputLayer(n_mid, n_out)<br>
+<br>
+def train(x_mb, t_mb):<br>
+&nbsp; y_rnn = np.zeros((len(x_mb), n_time+1, n_mid))<br>
+&nbsp; y_prev = y_rnn[:, 0, :]<br>
+&nbsp; for i in range(n_time):<br>
+&nbsp; &nbsp; x = x_mb[:, i, :]<br>
+&nbsp; &nbsp; rnn_layer.forward(x, y_prev)<br>
+&nbsp; &nbsp; y = rnn_layer.y<br>
+&nbsp; &nbsp; y_rnn[:, i+1, :] = y<br>
+&nbsp; &nbsp; y_prev = y<br>
+<br>
+&nbsp; output_layer.forward(y)<br>
+<br>
+&nbsp; output_layer.backward(t_mb)<br>
+&nbsp; grad_y = output_layer.grad_x<br>
+<br>
+&nbsp; rnn_layer.reset_sum_grad()<br>
+&nbsp; for i in reversed(range(n_time)):<br>
+&nbsp; &nbsp; x = x_mb[:, i, :]<br>
+&nbsp; &nbsp; y = y_rnn[:, i+1, :]<br>
+&nbsp; &nbsp; y_prev = y_rnn[:, i, :]<br>
+&nbsp; &nbsp; rnn_layer.backward(x, y, y_prev, grad_y)<br>
+&nbsp; &nbsp; grad_y = rnn_layer.grad_y_prev<br>
+<br>
+&nbsp; rnn_layer.update(eta)<br>
+&nbsp; output_layer.update(eta)<br>
+<br>
+def predict(x_mb):<br>
+&nbsp; y_prev = np.zeros((len(x_mb), n_mid))<br>
+&nbsp; for i in range(n_time):<br>
+&nbsp; &nbsp; x = x_mb[:, i, :]<br>
+&nbsp; &nbsp; rnn_layer.forward(x, y_prev)<br>
+&nbsp; &nbsp; y = rnn_layer.y<br>
+&nbsp; &nbsp; y_prev = y<br>
+&nbsp; output_layer.forward(y)<br>
+&nbsp; return output_layer.y<br>
+<br>
+def get_error(x, t):<br>
+&nbsp; """残差平方和 (residual sum of squares) を返す。"""<br>
+&nbsp; y = predict(x)<br>
+&nbsp; # <span class="latex">$$$ L = \frac12\sum_b^B (y_b - t_b)^2. $$$</span>&nbsp; return 1.0 / 2.0 * np.sum(np.square(y - t))<br>
+<br>
+error_record = []<br>
+n_batch = len(input_data) // batch_size<br>
+assert n_batch == 5<br>
+for i in range(epochs):<br>
+&nbsp; index_random = np.arange(len(input_data))<br>
+&nbsp; assert index_random.shape == (40,)<br>
+&nbsp; np.random.shuffle(index_random)<br>
+<br>
+&nbsp; # 訓練する。<br>
+&nbsp; for j in range(n_batch):&nbsp; # それぞれのバッチについて。<br>
+&nbsp; &nbsp; mb_index = index_random[j*batch_size : (j+1)*batch_size]<br>
+&nbsp; &nbsp; x_mb = input_data[mb_index, :]<br>
+&nbsp; &nbsp; assert x_mb.shape == (8, 10, 1)<br>
+&nbsp; &nbsp; t_mb = correct_data[mb_index, :]<br>
+&nbsp; &nbsp; assert t_mb.shape == (8, 1)<br>
+&nbsp; &nbsp; train(x_mb, t_mb)<br>
+&nbsp; # 1エポックの訓練が終わった。<br>
+<br>
+&nbsp; error = get_error(input_data, correct_data)<br>
+&nbsp; error_record.append(error)<br>
+<br>
+&nbsp; if i % interval == 0:<br>
+&nbsp; &nbsp; a = "Epoch: {}/{}, Error: {}"<br>
+&nbsp; &nbsp; a = a.format(i + 1, epochs, error)<br>
+&nbsp; &nbsp; print(a)<br>
+&nbsp; &nbsp; predicted = input_data[0].reshape(-1).tolist()<br>
+&nbsp; &nbsp; for i in range(n_sample):<br>
+&nbsp; &nbsp; &nbsp; x = np.array(predicted[-n_time:]).reshape(1, n_time, 1)<br>
+&nbsp; &nbsp; &nbsp; y = predict(x)<br>
+&nbsp; &nbsp; &nbsp; predicted.append(float(y[0, 0]))<br>
+<br>
+&nbsp; &nbsp; plt.plot(range(len(sin_y)), sin_y.tolist(), label=r"$y$")<br>
+&nbsp; &nbsp; plt.plot(range(len(predicted)), predicted, label=r"$\hat{y}$")<br>
+&nbsp; &nbsp; plt.legend()<br>
+&nbsp; &nbsp; plt.show()<br>
+<br>
+plt.plot(range(1, len(error_record)+1), error_record)<br>
+plt.xlabel("epochs")<br>
+plt.ylabel("Residual Sum of Squares")<br>
+plt.show()<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+<br>
+  </body>
+</html>
