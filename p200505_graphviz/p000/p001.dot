@@ -1,0 +1,6 @@
+// dot -Tpdf p000.dot -o pdf.pdf
+// https://qiita.com/umasoya/items/c1c4e583f393b27ebb7a
+// 2015-09-28 噂のGraphvizを使ってみる
+graph g {
+  "地球" -- "日本" -- "北海道"
+}
