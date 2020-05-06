@@ -1,33 +1,47 @@
 import cupy as np
 import matplotlib.pyplot as plt
+from sklearn import datasets
+from sklearn.model_selection import train_test_split
 
-n_time = 10
-n_in = 1
-n_mid = 20
-n_out = 1
+img_size = 8
+n_time = 4
+n_in = img_size
+n_mid = 128
+n_out = img_size
+n_disp = 10
 
 eta = 0.01
-epochs = 101
-batch_size = 8
+epochs = 201
+batch_size = 32
 interval = 10
 
 def sigmoid(x):
   return 1 / (1 + np.exp(-x))
 
-sin_x = np.linspace(-2 * np.pi, 2 * np.pi)
-sin_y = np.sin(sin_x) + 0.1 * np.random.randn(len(sin_x))
-n_sample = len(sin_x) - n_time
+digits = datasets.load_digits()
+digits = np.asarray(digits.data)
+digits_imgs = digits.reshape(-1, img_size, img_size)
+digits_imgs /= 15
+
+disp_imgs = digits_imgs[:n_disp]
+train_imgs = digits_imgs[n_disp:]
+n_sample_in_img = img_size - n_time
+n_sample = len(train_imgs) * n_sample_in_img
+
 input_data = np.zeros((n_sample, n_time, n_in))
 correct_data = np.zeros((n_sample, n_out))
-for i in range(0, n_sample):
-  input_data[i] = sin_y[i:i + n_time].reshape(-1, 1)
-  correct_data[i] = sin_y[i + n_time:i + n_time + 1]
+for i in range(len(train_imgs)):
+  for j in range(n_sample_in_img):
+    sample_id = i * n_sample_in_img + j
+    input_data[sample_id] = train_imgs[i, j:j + n_time]
+    correct_data[sample_id] = train_imgs[i, j + n_time]
+
+x_train, x_test, t_train, t_test = train_test_split(input_data, correct_data)
 
 class GRULayer:
   def __init__(self, n_upper, n):
     self.w = np.random.randn(3, n_upper, n) / np.sqrt(n_upper)
     self.v = np.random.randn(3, n, n) / np.sqrt(n)
-    # バイアスは省略する。
   def forward(self, x, y_prev):
     a0 = sigmoid(np.dot(x, self.w[0]) + np.dot(y_prev, self.v[0]))
     a1 = sigmoid(np.dot(x, self.w[1]) + np.dot(y_prev, self.v[1]))
@@ -61,7 +75,6 @@ class GRULayer:
     self.grad_w = np.zeros_like(self.w)
     self.grad_v = np.zeros_like(self.v)
   def update(self, eta):
-    # SGD (stochastic gradient descent).
     self.w -= eta * self.grad_w
     self.v -= eta * self.grad_v
 
@@ -73,9 +86,10 @@ class OutputLayer:
   def forward(self, x):
     self.x = x
     u = np.dot(x, self.w) + self.b
-    self.y = u  # 恒等関数。
+    # Sigmoid function.
+    self.y = 1 / (1 + np.exp(-u))
   def backward(self, t):
-    delta = self.y - t
+    delta = (self.y - t) * self.y * (1 - self.y)
 
     self.grad_w = np.dot(self.x.T, delta)
     self.grad_b = np.sum(delta, axis=0)
@@ -101,7 +115,6 @@ def train(x_mb, t_mb):
 
     gates = gru_layer.gates
     gates_rnn[:, :, i, :] = gates
-
   output_layer.forward(y)
 
   output_layer.backward(t_mb)
@@ -113,10 +126,8 @@ def train(x_mb, t_mb):
     y = y_rnn[:, i + 1, :]
     y_prev = y_rnn[:, i, :]
     gates = gates_rnn[:, :, i, :]
-
     gru_layer.backward(x, y, y_prev, gates, grad_y)
     grad_y = gru_layer.grad_y_prev
-
   gru_layer.update(eta)
   output_layer.update(eta)
 
@@ -131,47 +142,46 @@ def predict(x_mb):
   return output_layer.y
 
 def get_error(x, t):
-  """残差平方和を返す。"""
   y = predict(x)
-  return 1.0 / 2.0 * np.sum(np.square(y - t))
+  return np.sum(np.square(y - t)) / len(x)
 
-error_record = []
-n_batch = len(input_data) // batch_size
+def generate_images():
+  plt.figure(figsize=(10, 1))
+  for i in range(n_disp):
+    ax = plt.subplot(1, n_disp, i + 1)
+    plt.imshow(disp_imgs[i].tolist(), cmap="Greys_r")
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+  plt.show()
+
+  gen_imgs = disp_imgs.copy()
+  plt.figure(figsize=(10, 1))
+  for i in range(n_disp):
+    for j in range(n_sample_in_img):
+      x = gen_imgs[i, j:j + n_time].reshape(1, n_time, img_size)
+      gen_imgs[i, j + n_time] = predict(x)[0]
+    ax = plt.subplot(1, n_disp, i + 1)
+    plt.imshow(gen_imgs[i].tolist(), cmap="Greys_r")
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+  plt.show()
+
+n_batch = len(x_train) // batch_size
 for i in range(epochs):
-  index_random = np.arange(len(input_data))
+  index_random = np.arange(len(x_train))
   np.random.shuffle(index_random)
   for j in range(n_batch):
     mb_index = index_random[j * batch_size:(j + 1) * batch_size]
-    x_mb = input_data[mb_index, :]
-    t_mb = correct_data[mb_index, :]
+    x_mb = x_train[mb_index, :]
+    t_mb = t_train[mb_index, :]
     train(x_mb, t_mb)
-  error = get_error(input_data, correct_data)
-  error_record.append(error)
   if i % interval == 0:
-    a = "Epoch: {}/{}, Error: {}"
-    a = a.format(i + 1, epochs, error)
+    error_train = get_error(x_train, t_train)
+    error_test = get_error(x_test, t_test)
+    a = "Epoch: {}/{}, Error_train: {}, Error_test: {}"
+    a = a.format(i, epochs - 1, error_train, error_test)
     print(a)
-    predicted = input_data[0].reshape(-1).tolist()
-    for i in range(n_sample):
-      x = np.array(predicted[-n_time:]).reshape(1, n_time, -1)
-      y = predict(x)
-      predicted.append(float(y[0, 0]))
-    plt.plot(range(len(sin_y)), sin_y.tolist(), label="Correct")
-    plt.plot(range(len(predicted)), predicted, label="Predicted")
-    plt.legend()
-    plt.show()
-plt.plot(range(1, len(error_record) + 1), error_record)
-plt.xlabel("Epochs")
-plt.ylabel("Error")
-plt.show()
-
-
-
-
-
-
-
-
+    generate_images()
 
 
 
